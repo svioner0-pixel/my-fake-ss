@@ -1,0 +1,65 @@
+import { NextRequest } from 'next/server';
+
+export async function POST(request: NextRequest) {
+  try {
+    const formData = await request.formData();
+    const userImage = formData.get('image') as File;
+    const userPrompt = (formData.get('prompt') as string) || 'make this more realistic';
+
+    if (!userImage) {
+      return new Response('Görsel eksik', { status: 400 });
+    }
+
+    // Görseli base64 yap
+    const bytes = await userImage.arrayBuffer();
+    const buffer = Buffer.from(bytes);
+    const base64Image = `data:${userImage.type};base64,${buffer.toString('base64')}`;
+
+    // Eternal AI’ye istek at
+    const eternalRes = await fetch('https://open.eternalai.org/generate', {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.ETERNAL_AI_API_KEY!,
+        'Content-Type': 'application/json',
+        'accept': 'application/json',
+      },
+      body: JSON.stringify({
+        images: [base64Image],
+        effect_id: '1',                    // basit bir efekt (docs’tan değiştirebilirsin)
+        prompt: userPrompt,
+      }),
+    });
+
+    const data = await eternalRes.json();
+
+    // Sonuç için polling (request_id varsa)
+    let imageUrl = '';
+    if (data.request_id) {
+      // 3-5 saniye bekleyip sonucu sor (basit polling)
+      await new Promise(resolve => setTimeout(resolve, 4000));
+      const pollRes = await fetch(`https://open.eternalai.org/poll-result/${data.request_id}`, {
+        headers: { 'x-api-key': process.env.ETERNAL_AI_API_KEY! }
+      });
+      const pollData = await pollRes.json();
+      imageUrl = pollData.image_url || pollData.output || '';
+    } else {
+      imageUrl = data.image_url || data.output || '';
+    }
+
+    if (!imageUrl) {
+      return new Response('Sonuç alınamadı', { status: 500 });
+    }
+
+    // Sonuç resmi çek ve kullanıcıya dön
+    const finalRes = await fetch(imageUrl);
+    const imageBuffer = await finalRes.arrayBuffer();
+
+    return new Response(imageBuffer, {
+      headers: { 'Content-Type': 'image/png' },
+    });
+
+  } catch (error) {
+    console.error(error);
+    return new Response('Sunucu hatası', { status: 500 });
+  }
+}
